@@ -64,28 +64,43 @@ func main() {
       continue
     }
 
-    cellFeature := geojson.NewMultiPolygonFeature(cellGeometry...)
-    holeCellFeature := geojson.NewMultiPolygonFeature(holeCellGeometry...)
+    var cellFeature *geojson.Feature
+    if len(cellIds) > 0 {
+      cellFeature = geojson.NewMultiPolygonFeature(cellGeometry...)
+      cellFeature.SetProperty("cellids", cellIds)
+      cellFeature.SetProperty("stroke-width", 1)
+      cellFeature.SetProperty("stroke-opacity", 1)
+      cellFeature.SetProperty("fill-opacity", 0.3)
+      if isHole {
+        cellFeature.SetProperty("stroke", "#ff8080")
+        cellFeature.SetProperty("fill", "#ff8080")
+      } else {
+        cellFeature.SetProperty("stroke", "#008000")
+        cellFeature.SetProperty("fill", "#80ff80")
+      }
+    }
 
-    cellFeature.SetProperty("cellids", cellIds)
-    cellFeature.SetProperty("stroke", "#008000")
-    cellFeature.SetProperty("stroke-width", 1)
-    cellFeature.SetProperty("stroke-opacity", 1)
-    cellFeature.SetProperty("fill", "#80ff80")
-    cellFeature.SetProperty("fill-opacity", 0.3)
-    holeCellFeature.SetProperty("holecellids", holeCellIds)
-    holeCellFeature.SetProperty("stroke", "#ff8080")
-    holeCellFeature.SetProperty("stroke-width", 1)
-    holeCellFeature.SetProperty("stroke-opacity", 1)
-    holeCellFeature.SetProperty("fill", "#ff8080")
-    holeCellFeature.SetProperty("fill-opacity", 0.3)
+    var holeCellFeature *geojson.Feature
+    if len(holeCellIds) > 0 {
+      holeCellFeature = geojson.NewMultiPolygonFeature(holeCellGeometry...)
+      holeCellFeature.SetProperty("holecellids", holeCellIds)
+      holeCellFeature.SetProperty("stroke", "#ff8080")
+      holeCellFeature.SetProperty("stroke-width", 1)
+      holeCellFeature.SetProperty("stroke-opacity", 1)
+      holeCellFeature.SetProperty("fill", "#ff8080")
+      holeCellFeature.SetProperty("fill-opacity", 0.3)
+    }
 
     if *outputSeparateFiles {
       var outputGeojsonData []byte
       var err error
       tempFeatureCollection := geojson.NewFeatureCollection()
-      tempFeatureCollection.AddFeature(cellFeature)
-      tempFeatureCollection.AddFeature(holeCellFeature)
+      if len(cellIds) > 0 {
+        tempFeatureCollection.AddFeature(cellFeature)
+      }
+      if len(holeCellIds) > 0 {
+        tempFeatureCollection.AddFeature(holeCellFeature)
+      }
       tempFeatureCollection.AddFeature(feature)
       if *shouldIndent {
         outputGeojsonData, err = json.MarshalIndent(tempFeatureCollection, "", " ")
@@ -96,8 +111,12 @@ func main() {
       err = ioutil.WriteFile(fmt.Sprintf("%s/%s_%05d.geojson", *outputDirectory, strings.Replace(getPathForFeature(feature), "/", "_", -1), index + 1), outputGeojsonData, 0644)
       check(err)
     } else {
-      featureCollection.AddFeature(cellFeature)
-      featureCollection.AddFeature(holeCellFeature)
+      if len(cellIds) > 0 {
+        featureCollection.AddFeature(cellFeature)
+      }
+      if len(holeCellIds) > 0 {
+        featureCollection.AddFeature(holeCellFeature)
+      }
     }
 
   }
