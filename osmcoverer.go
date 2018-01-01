@@ -32,10 +32,6 @@ func main() {
   inputFilePath := flag.Args()[0]
   inputFileName := filepath.Base(inputFilePath)
   featureCollection := readGeojson(inputFilePath)
-  indent := ""
-  if *shouldIndent {
-    indent = " "
-  }
   os.MkdirAll(*outputDirectory, os.ModePerm)
   for index, feature := range featureCollection.Features {
     relRole := "outer"
@@ -85,11 +81,17 @@ func main() {
     holeCellFeature.SetProperty("fill-opacity", 0.3)
 
     if *outputSeparateFiles {
+      var outputGeojsonData []byte
+      var err error
       tempFeatureCollection := geojson.NewFeatureCollection()
       tempFeatureCollection.AddFeature(cellFeature)
       tempFeatureCollection.AddFeature(holeCellFeature)
       tempFeatureCollection.AddFeature(feature)
-      outputGeojsonData, err := json.MarshalIndent(tempFeatureCollection, "", indent)
+      if *shouldIndent {
+        outputGeojsonData, err = json.MarshalIndent(tempFeatureCollection, "", " ")
+      } else {
+        outputGeojsonData, err = tempFeatureCollection.MarshalJSON()
+      }
       check(err)
       err = ioutil.WriteFile(fmt.Sprintf("%s/%s_%05d.geojson", *outputDirectory, strings.Replace(getPathForFeature(feature), "/", "_", -1), index + 1), outputGeojsonData, 0644)
       check(err)
@@ -101,8 +103,13 @@ func main() {
   }
 
   if ! *outputSeparateFiles {
-    outputGeojsonData, err := json.MarshalIndent(featureCollection, "", indent)
-    check(err)
+    var outputGeojsonData []byte
+    var err error
+    if *shouldIndent {
+      outputGeojsonData, err = json.MarshalIndent(featureCollection, "", " ")
+    } else {
+      outputGeojsonData, err = featureCollection.MarshalJSON()
+    }
     err = ioutil.WriteFile(fmt.Sprintf("%s/%s.geojson", *outputDirectory, strings.TrimSuffix(inputFileName, filepath.Ext(inputFileName))), outputGeojsonData, 0644)
     check(err)
   }
