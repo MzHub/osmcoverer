@@ -3,9 +3,11 @@ osmcoverer
 
 **osmcoverer** takes OpenStreetMap GeoJSON as input and outputs the same GeoJSON augmented with S2 cell approximation of the Features using RegionCoverer.
 
-### To install
+### How to get it
 
-Get [go](https://golang.org/doc/install), then:
+See [releases](https://github.com/MzHub/osmcoverer/releases) for pre-built binaries.
+
+To build it yourself, get [go](https://golang.org/doc/install), then:
 
     go get github.com/mzhub/osmcoverer
 
