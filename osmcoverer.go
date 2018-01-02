@@ -4,8 +4,10 @@ import (
   "flag"
   "fmt"
   "os"
+  "strconv"
   "strings"
   "encoding/json"
+  "encoding/csv"
   "io/ioutil"
   "path/filepath"
   "github.com/golang/geo/s2"
@@ -14,6 +16,7 @@ import (
 
 
 func main() {
+  // Set up
   outputSeparateFiles := flag.Bool("separate", false, "Output Features into separate files")
   shouldIndent := flag.Bool("pretty", true, "Output pretty printend GeoJSON")
   skipCells := flag.Int("skipcells", 1000, "Skip features with more cells than this")
@@ -21,6 +24,7 @@ func main() {
   minLevel := flag.Int("minlevel", 5, "MinLevel setting for RegionCoverer")
   maxCells := flag.Int("maxcells", 1000, "MaxCells setting for RegionCoverer")
   outputDirectory := flag.String("outdir", "output", "Output directory")
+  markerInputFilePath := flag.String("markers", "", "CSV of markers. Format: <name>,<latitude>,<longitude> Names containing a comma must be in quotes.")
   flag.Parse()
   fmt.Println("Separate:", *outputSeparateFiles)
   fmt.Println("Pretty:", *shouldIndent)
@@ -28,11 +32,23 @@ func main() {
   fmt.Println("Max level:", *maxLevel)
   fmt.Println("Min level:", *minLevel)
   fmt.Println("Max cells:", *maxCells)
+  fmt.Println("Markers:", *markerInputFilePath != "")
   fmt.Println("")
   inputFilePath := flag.Args()[0]
   inputFileName := filepath.Base(inputFilePath)
-  featureCollection := readGeojson(inputFilePath)
+  // markerInputFileName := filepath.Base(*markerInputFilePath)
   os.MkdirAll(*outputDirectory, os.ModePerm)
+
+  // Spaghetti for now
+  var markerCellIds []*s2.CellID
+  var markerFeatures []*geojson.Feature
+  if *markerInputFilePath != "" {
+    markerCellIds, markerFeatures = getMarkersFromCsv(*markerInputFilePath)
+  } else {
+    markerCellIds = []*s2.CellID{}
+    markerFeatures = []*geojson.Feature{}
+  }
+  featureCollection := getFeatureCollectionFromGeojson(inputFilePath)
   for index, feature := range featureCollection.Features {
     relRole := "outer"
     if feature.Properties["@relations"] != nil {
@@ -56,8 +72,8 @@ func main() {
       }
     }
     isHole := relRole == "inner"
-    cellIds, cellGeometry := getCoveringFromPolygons(polygons, isHole, *maxLevel, *minLevel, *maxCells)
-    holeCellIds, holeCellGeometry := getCoveringFromPolygons(holePolygons, true, *maxLevel, *minLevel, *maxCells)
+    covering, cellIds, cellGeometry := getCoveringFromPolygons(polygons, isHole, *maxLevel, *minLevel, *maxCells)
+    holeCovering, holeCellIds, holeCellGeometry := getCoveringFromPolygons(holePolygons, true, *maxLevel, *minLevel, *maxCells)
 
     if len(cellIds) > *skipCells || len(holeCellIds) > *skipCells {
       fmt.Println("Skipping", getPathForFeature(feature), len(cellIds), len(holeCellIds))
@@ -91,6 +107,8 @@ func main() {
       holeCellFeature.SetProperty("fill-opacity", 0.3)
     }
 
+    checkContainedMarkerFeatures(covering, holeCovering, isHole, feature, markerCellIds, markerFeatures)
+
     if *outputSeparateFiles {
       var outputGeojsonData []byte
       var err error
@@ -118,8 +136,11 @@ func main() {
         featureCollection.AddFeature(holeCellFeature)
       }
     }
-
+    if (index + 1) % 1000 == 0 {
+      fmt.Println(fmt.Sprintf("Parsed %d Features", index + 1))
+    }
   }
+  fmt.Println(fmt.Sprintf("Parsed %d Features", len(featureCollection.Features)))
 
   if ! *outputSeparateFiles {
     var outputGeojsonData []byte
@@ -132,11 +153,101 @@ func main() {
     err = ioutil.WriteFile(fmt.Sprintf("%s/%s.geojson", *outputDirectory, strings.TrimSuffix(inputFileName, filepath.Ext(inputFileName))), outputGeojsonData, 0644)
     check(err)
   }
+
+  outputContainedMarkersToCsv(markerFeatures, *outputDirectory)
+
+  // End
   fmt.Println("Done")
 }
 
 
-func getCoveringFromPolygons(polygons []*s2.Polygon, isHole bool, maxLevel int, minLevel int, maxCells int) ([]string, [][][][]float64) {
+func getFeatureCollectionFromGeojson(geojsonFilename string) *geojson.FeatureCollection {
+  geojsonData, err := ioutil.ReadFile(geojsonFilename)
+  check(err)
+  featureCollection, err := geojson.UnmarshalFeatureCollection(geojsonData)
+  check(err)
+  return featureCollection
+}
+
+
+func getMarkersFromCsv(csvFilename string) ([]*s2.CellID, []*geojson.Feature) {
+  cellIds := []*s2.CellID{}
+  features := []*geojson.Feature{}
+  for _, row := range readCsv(csvFilename) {
+    name := row[0]
+    lat, err := strconv.ParseFloat(row[1], 64)
+    check(err)
+    lng, err := strconv.ParseFloat(row[2], 64)
+    check(err)
+    latlng := s2.LatLngFromDegrees(lat, lng)
+    cellId := s2.CellIDFromLatLng(latlng)
+    cellIds = append(cellIds, &cellId)
+    feature := geojson.NewPointFeature([]float64{lng, lat})
+    feature.SetProperty("name", name)
+    feature.SetProperty("cellid", cellId.ToToken())
+    feature.SetProperty("within", []string{})
+    features = append(features, feature)
+  }
+  return cellIds, features
+}
+
+
+func readCsv(csvFilename string) [][]string {
+  csvFile, err := os.Open(csvFilename)
+  check(err)
+  defer csvFile.Close()
+  reader := csv.NewReader(csvFile)
+  reader.TrimLeadingSpace = true
+  rows, err := reader.ReadAll()
+  check(err)
+  return rows
+}
+
+
+func outputContainedMarkersToCsv(features []*geojson.Feature, outputDirectory string) {
+  csvFile, err := os.Create(fmt.Sprintf("%s/markers_within_features.csv", outputDirectory))
+  check(err)
+  defer csvFile.Close()
+  writer := csv.NewWriter(csvFile)
+  defer writer.Flush()
+  for _, feature := range features {
+    for _, within := range feature.Properties["within"].([]string) {
+      err := writer.Write([]string{feature.Properties["name"].(string), within})
+      check(err)
+    }
+  }
+}
+
+
+func checkContainedMarkerFeatures(
+  coveringCellUnion *s2.CellUnion,
+  holeCoveringCellUnion *s2.CellUnion,
+  isMainFeatureHole bool,
+  coveringFeature *geojson.Feature,
+  markerCellIds []*s2.CellID,
+  markerFeatures []*geojson.Feature) (
+    []*s2.CellID,
+    []*geojson.Feature) {
+  containedMarkerCellIds := []*s2.CellID{}
+  containedMarkerFeatures := []*geojson.Feature{}
+  for index, markerCellId := range markerCellIds {
+    if coveringCellUnion.ContainsCellID(*markerCellId) {
+      withinText := getPathForFeature(coveringFeature)
+      if holeCoveringCellUnion.ContainsCellID(*markerCellId) || isMainFeatureHole {
+        withinText += " (hole)"
+      }
+      within := markerFeatures[index].Properties["within"]
+      within = append(within.([]string), withinText)
+      markerFeatures[index].SetProperty("within", within)
+      containedMarkerCellIds = append(containedMarkerCellIds, markerCellIds[index])
+      containedMarkerFeatures = append(containedMarkerFeatures, markerFeatures[index])
+    }
+  }
+  return containedMarkerCellIds, containedMarkerFeatures
+}
+
+
+func getCoveringFromPolygons(polygons []*s2.Polygon, isHole bool, maxLevel int, minLevel int, maxCells int) (*s2.CellUnion, []string, [][][][]float64) {
   var covering s2.CellUnion
   var cellIds []string
   var cellGeometry [][][][]float64
@@ -159,16 +270,7 @@ func getCoveringFromPolygons(polygons []*s2.Polygon, isHole bool, maxLevel int, 
       cellGeometry = append(cellGeometry, [][][]float64{vertices})
     }
   }
-  return cellIds, cellGeometry
-}
-
-
-func readGeojson(geojsonFilename string) *geojson.FeatureCollection {
-  rawGeojsonData, err := ioutil.ReadFile(geojsonFilename)
-  check(err)
-  featureCollection, err := geojson.UnmarshalFeatureCollection(rawGeojsonData)
-  check(err)
-  return featureCollection
+  return &covering, cellIds, cellGeometry
 }
 
 
