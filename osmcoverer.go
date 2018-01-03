@@ -24,6 +24,8 @@ type Marker struct {
 func main() {
   // Set up
   outputSeparateFiles := flag.Bool("separate", false, "Output Features into separate files")
+  skipMarkerlessFeatures := flag.Bool("skipmarkerless", false, "Skip features with no markers within")
+  excludeCellFeatures := flag.Bool("excludecells", false, "Exclude cell features (only useful when visualizing markers)")
   shouldIndent := flag.Bool("pretty", true, "Output pretty printend GeoJSON")
   skipCells := flag.Int("skipcells", 1000, "Skip features with more cells than this")
   maxLevel := flag.Int("maxlevel", 20, "MaxLevel setting for RegionCoverer")
@@ -53,6 +55,7 @@ func main() {
 
   // Spaghetti for now
   var markers []Marker
+  featuresWithMarkers := []*geojson.Feature{}
   if *markerInputFilePath != "" {
     markers = getMarkersFromCsv(*markerInputFilePath, *markerColor)
   } else {
@@ -139,10 +142,10 @@ func main() {
       var outputGeojsonData []byte
       var err error
       tempFeatureCollection := geojson.NewFeatureCollection()
-      if len(cellIds) > 0 {
+      if len(cellIds) > 0 && ! *excludeCellFeatures {
         tempFeatureCollection.AddFeature(cellFeature)
       }
-      if len(holeCellIds) > 0 {
+      if len(holeCellIds) > 0 && ! *excludeCellFeatures {
         tempFeatureCollection.AddFeature(holeCellFeature)
       }
       for _, marker := range containedMarkers {
@@ -167,13 +170,23 @@ func main() {
       err = ioutil.WriteFile(fmt.Sprintf("%s/%s_%05d %s.geojson", *outputDirectory, strings.Replace(getPathForFeature(feature), "/", "_", -1), index + 1, featureName), outputGeojsonData, 0644)
       check(err)
     } else {
-      if len(cellIds) > 0 {
+      if len(cellIds) > 0 && ! *excludeCellFeatures {
         featureCollection.AddFeature(cellFeature)
+        if len(containedMarkers) > 0 || len(containedHoleMarkers) > 0 {
+          featuresWithMarkers = append(featuresWithMarkers, cellFeature)
+        }
       }
-      if len(holeCellIds) > 0 {
-        featureCollection.AddFeature(holeCellFeature)
+      if len(holeCellIds) > 0 && ! *excludeCellFeatures {
+        if len(containedMarkers) > 0 || len(containedHoleMarkers) > 0 {
+          featuresWithMarkers = append(featuresWithMarkers, holeCellFeature)
+        }
       }
     }
+
+    if len(containedMarkers) > 0 || len(containedHoleMarkers) > 0 {
+      featuresWithMarkers = append(featuresWithMarkers, feature)
+    }
+
     if (index + 1) % 1000 == 0 {
       fmt.Println(fmt.Sprintf("Parsed %d Features", index + 1))
     }
@@ -182,7 +195,13 @@ func main() {
   if ! *outputSeparateFiles {
     var outputGeojsonData []byte
     var err error
+    if *skipMarkerlessFeatures {
+      featureCollection.Features = featuresWithMarkers
+    }
     for _, marker := range markers {
+      if len(marker.feature.Properties["within"].([]string)) > 0 {
+        marker.feature.SetProperty("marker-color", markerCoverColor)
+      }
       featureCollection.AddFeature(marker.feature)
     }
     if *shouldIndent {
