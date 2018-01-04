@@ -25,6 +25,7 @@ func main() {
   // Set up
   outputSeparateFiles := flag.Bool("separate", false, "Output Features into separate files")
   skipMarkerlessFeatures := flag.Bool("skipmarkerless", false, "Skip features with no markers within")
+  skipFeaturelessMarkers := flag.Bool("skipfeatureless", false, "Skip markers not within features")
   excludeCellFeatures := flag.Bool("excludecellfeatures", false, "Exclude cell features (only useful when visualizing markers)")
   shouldIndent := flag.Bool("pretty", true, "Output pretty printend GeoJSON")
   maxCellFeatures := flag.Int("maxcellfeatures", 1000, "Skip features which generate more cells than this")
@@ -44,6 +45,7 @@ func main() {
   fmt.Println("Separate:", *outputSeparateFiles)
   fmt.Println("Pretty:", *shouldIndent)
   fmt.Println("Skip markerless:", *skipMarkerlessFeatures)
+  fmt.Println("Skip featureless:", *skipFeaturelessMarkers)
   fmt.Println("Exclude cell features:", *excludeCellFeatures)
   if *gridLevel > 0 {
     fmt.Println("Grid:", fmt.Sprintf("Level %d", *gridLevel))
@@ -186,9 +188,11 @@ func main() {
         marker.feature.SetProperty("marker-color", *markerHoleColor)
         tempFeatureCollection.AddFeature(marker.feature)
       }
-      for _, marker := range nearbyMarkers {
-        marker.feature.SetProperty("marker-color", *markerColor)
-        tempFeatureCollection.AddFeature(marker.feature)
+      if ! *skipFeaturelessMarkers {
+        for _, marker := range nearbyMarkers {
+          marker.feature.SetProperty("marker-color", *markerColor)
+          tempFeatureCollection.AddFeature(marker.feature)
+        }
       }
       tempFeatureCollection.AddFeature(feature)
       if *shouldIndent {
@@ -231,6 +235,8 @@ func main() {
     for _, marker := range markers {
       if len(marker.feature.Properties["within"].([]string)) > 0 {
         marker.feature.SetProperty("marker-color", markerCoverColor)
+      } else if *skipFeaturelessMarkers {
+        continue
       }
       featureCollection.AddFeature(marker.feature)
     }
