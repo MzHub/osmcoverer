@@ -23,7 +23,7 @@ For all available options:
 
 Example:
 
-    osmcoverer -separate -pretty=false -skipcells=1000 -outdir=output input.geojson
+    osmcoverer -separate -pretty=false -maxcellfeatures=1000 -outdir=output input.geojson
 
 You can also include a CSV file of markers to check for overlap within the OSM Features:
 
