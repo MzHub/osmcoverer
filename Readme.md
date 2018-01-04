@@ -37,4 +37,4 @@ Input GeoJSON may even be omitted. For example visualize markers and a grid of l
 
 The output GeoJSON can be visualized by pasting into [geojson.io](http://geojson.io).
 
-Be careful with large datasets and don't set minlevel too low.
+Be careful with large datasets and don't set minlevel or grid level too low.
