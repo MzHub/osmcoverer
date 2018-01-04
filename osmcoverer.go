@@ -25,12 +25,13 @@ func main() {
   // Set up
   outputSeparateFiles := flag.Bool("separate", false, "Output Features into separate files")
   skipMarkerlessFeatures := flag.Bool("skipmarkerless", false, "Skip features with no markers within")
-  excludeCellFeatures := flag.Bool("excludecells", false, "Exclude cell features (only useful when visualizing markers)")
+  excludeCellFeatures := flag.Bool("excludecellfeatures", false, "Exclude cell features (only useful when visualizing markers)")
   shouldIndent := flag.Bool("pretty", true, "Output pretty printend GeoJSON")
-  skipCells := flag.Int("skipcells", 1000, "Skip features with more cells than this")
+  maxCellFeatures := flag.Int("maxcellfeatures", 1000, "Skip features which generate more cells than this")
   maxLevel := flag.Int("maxlevel", 20, "MaxLevel setting for RegionCoverer")
   minLevel := flag.Int("minlevel", 5, "MinLevel setting for RegionCoverer")
   maxCells := flag.Int("maxcells", 1000, "MaxCells setting for RegionCoverer")
+  gridLevel := flag.Int("grid", 0, "Add a grid of given level cells")
   outputDirectory := flag.String("outdir", "output", "Output directory")
   markerInputFilePath := flag.String("markers", "", "CSV of markers. Format: <name>,<latitude>,<longitude> Names containing a comma must be in quotes.")
   featureColor := flag.String("cf", "#7e7e7e", "Feature color")
@@ -42,26 +43,43 @@ func main() {
   flag.Parse()
   fmt.Println("Separate:", *outputSeparateFiles)
   fmt.Println("Pretty:", *shouldIndent)
-  fmt.Println("Skip cells:", *skipCells)
+  fmt.Println("Skip markerless:", *skipMarkerlessFeatures)
+  fmt.Println("Exclude cell features:", *excludeCellFeatures)
+  if *gridLevel > 0 {
+    fmt.Println("Grid:", fmt.Sprintf("Level %d", *gridLevel))
+  } else {
+    fmt.Println("Grid: false")
+  }
+  fmt.Println("Max cell features:", *maxCellFeatures)
   fmt.Println("Max level:", *maxLevel)
   fmt.Println("Min level:", *minLevel)
   fmt.Println("Max cells:", *maxCells)
   fmt.Println("Markers:", *markerInputFilePath != "")
   fmt.Println("")
-  inputFilePath := flag.Args()[0]
-  inputFileName := filepath.Base(inputFilePath)
   // markerInputFileName := filepath.Base(*markerInputFilePath)
   os.MkdirAll(*outputDirectory, os.ModePerm)
 
   // Spaghetti for now
+
+  boundingRect := s2.EmptyRect()
+
   var markers []Marker
   featuresWithMarkers := []*geojson.Feature{}
   if *markerInputFilePath != "" {
-    markers = getMarkersFromCsv(*markerInputFilePath, *markerColor)
+    markers = getMarkersFromCsv(*markerInputFilePath, *markerColor, *gridLevel)
   } else {
     markers = []Marker{}
   }
-  featureCollection := getFeatureCollectionFromGeojson(inputFilePath)
+
+  var featureCollection geojson.FeatureCollection
+  inputFileName := ""
+  if len(flag.Args()) > 0 {
+    inputFilePath := flag.Args()[0]
+    inputFileName = filepath.Base(inputFilePath)
+    featureCollection = *getFeatureCollectionFromGeojson(inputFilePath)
+  } else {
+    featureCollection = *geojson.NewFeatureCollection()
+  }
   for index, feature := range featureCollection.Features {
     featureName := ""
     if feature.Properties["name"] != nil {
@@ -103,7 +121,13 @@ func main() {
     covering, cellIds, cellGeometry := getCoveringFromPolygons(polygons, isHole, *maxLevel, *minLevel, *maxCells)
     holeCovering, holeCellIds, holeCellGeometry := getCoveringFromPolygons(holePolygons, true, *maxLevel, *minLevel, *maxCells)
 
-    if len(cellIds) > *skipCells || len(holeCellIds) > *skipCells {
+    var featureBoundingRect s2.Rect
+    if *gridLevel > 0 {
+      featureBoundingRect = covering.RectBound()
+      boundingRect = boundingRect.Union(featureBoundingRect)
+    }
+
+    if len(cellIds) > *maxCellFeatures || len(holeCellIds) > *maxCellFeatures {
       fmt.Println("Skipping", getPathForFeature(feature), len(cellIds), len(holeCellIds))
       continue
     }
@@ -142,6 +166,12 @@ func main() {
       var outputGeojsonData []byte
       var err error
       tempFeatureCollection := geojson.NewFeatureCollection()
+      if *gridLevel > 0 {
+        gridFeature := getGridFeatureFromRect(featureBoundingRect, *gridLevel)
+        gridFeature.SetProperty("stroke-width", 1)
+        gridFeature.SetProperty("fill-opacity", 0.2)
+        tempFeatureCollection.AddFeature(gridFeature)
+      }
       if len(cellIds) > 0 && ! *excludeCellFeatures {
         tempFeatureCollection.AddFeature(cellFeature)
       }
@@ -204,12 +234,28 @@ func main() {
       }
       featureCollection.AddFeature(marker.feature)
     }
+    if *gridLevel > 0 {
+      cellIds := []s2.CellID{}
+      for _, marker := range markers {
+        cellIds = append(cellIds, *marker.cellId)
+      }
+      markersCellUnion := s2.CellUnion(cellIds)
+      boundingRect = boundingRect.Union(markersCellUnion.RectBound())
+      gridFeature := getGridFeatureFromRect(boundingRect, *gridLevel)
+      gridFeature.SetProperty("stroke-width", 1)
+      gridFeature.SetProperty("fill-opacity", 0.2)
+      featureCollection.Features = append([]*geojson.Feature{gridFeature}, featureCollection.Features...)
+    }
     if *shouldIndent {
       outputGeojsonData, err = json.MarshalIndent(featureCollection, "", " ")
     } else {
       outputGeojsonData, err = featureCollection.MarshalJSON()
     }
-    err = ioutil.WriteFile(fmt.Sprintf("%s/%s.geojson", *outputDirectory, strings.TrimSuffix(inputFileName, filepath.Ext(inputFileName))), outputGeojsonData, 0644)
+    if inputFileName != "" {
+      err = ioutil.WriteFile(fmt.Sprintf("%s/%s.geojson", *outputDirectory, strings.TrimSuffix(inputFileName, filepath.Ext(inputFileName))), outputGeojsonData, 0644)
+    } else {
+      err = ioutil.WriteFile(fmt.Sprintf("%s/output.geojson", *outputDirectory), outputGeojsonData, 0644)
+    }
     check(err)
   }
 
@@ -229,7 +275,7 @@ func getFeatureCollectionFromGeojson(geojsonFilename string) *geojson.FeatureCol
 }
 
 
-func getMarkersFromCsv(csvFilename string, markerColor string) []Marker {
+func getMarkersFromCsv(csvFilename string, markerColor string, gridLevel int) []Marker {
   markers := []Marker{}
   for _, row := range readCsv(csvFilename) {
     var marker Marker
@@ -242,6 +288,9 @@ func getMarkersFromCsv(csvFilename string, markerColor string) []Marker {
     cellId := s2.CellIDFromLatLng(latlng)
     marker.cellId = &cellId
     feature := geojson.NewPointFeature([]float64{lng, lat})
+    if gridLevel > 0 {
+      feature.SetProperty(fmt.Sprintf("level%dcellid", gridLevel), cellId.Parent(gridLevel).ToToken())
+    }
     feature.SetProperty("name", name)
     feature.SetProperty("cellid", cellId.ToToken())
     feature.SetProperty("within", []string{})
@@ -326,6 +375,15 @@ func checkContainedMarkerFeatures(
 }
 
 
+func getGridFeatureFromRect(rect s2.Rect, gridLevel int) *geojson.Feature {
+  regionCoverer := &s2.RegionCoverer{MaxLevel: gridLevel, MinLevel: gridLevel, MaxCells: 10}
+  covering := regionCoverer.Covering(rect)
+  _, cellGeometry := getGeojsonMultiPolygonFromCellUnion(covering)
+  feature := geojson.NewMultiPolygonFeature(cellGeometry...)
+  return feature
+}
+
+
 func getCoveringFromPolygons(polygons []*s2.Polygon, isHole bool, maxLevel int, minLevel int, maxCells int) (*s2.CellUnion, []string, [][][][]float64) {
   var covering s2.CellUnion
   var cellIds []string
@@ -337,19 +395,29 @@ func getCoveringFromPolygons(polygons []*s2.Polygon, isHole bool, maxLevel int, 
     } else {
       covering = regionCoverer.Covering(polygon)
     }
-    for _, cellId := range covering {
-      cellIds = append(cellIds, cellId.ToToken())
-      cell := s2.CellFromCellID(cellId)
-      vertices := [][]float64{}
-      for k := 0; k < 5; k++ {
-        vertex := cell.Vertex(k % 4)
-        latlng := s2.LatLngFromPoint(vertex)
-        vertices = append(vertices, []float64{float64(latlng.Lng.Degrees()), float64(latlng.Lat.Degrees())})
-      }
-      cellGeometry = append(cellGeometry, [][][]float64{vertices})
-    }
+    ci, cg := getGeojsonMultiPolygonFromCellUnion(covering)
+    cellIds = append(cellIds, ci...)
+    cellGeometry = append(cellGeometry, cg...)
   }
   return &covering, cellIds, cellGeometry
+}
+
+
+func getGeojsonMultiPolygonFromCellUnion(cellUnion s2.CellUnion) ([]string, [][][][]float64) {
+  var cellIds []string
+  var cellGeometry [][][][]float64
+  for _, cellId := range cellUnion {
+    cellIds = append(cellIds, cellId.ToToken())
+    cell := s2.CellFromCellID(cellId)
+    vertices := [][]float64{}
+    for k := 0; k < 5; k++ {
+      vertex := cell.Vertex(k % 4)
+      latlng := s2.LatLngFromPoint(vertex)
+      vertices = append(vertices, []float64{float64(latlng.Lng.Degrees()), float64(latlng.Lat.Degrees())})
+    }
+    cellGeometry = append(cellGeometry, [][][]float64{vertices})
+  }
+  return cellIds, cellGeometry
 }
 
 
@@ -395,7 +463,9 @@ func getS2LoopFromGeojsonRing(ring [][]float64, isHole bool) *s2.Loop {
   if isHole {
     points = reverseS2Points(points)
   }
-  return s2.LoopFromPoints(points)
+  loop := s2.LoopFromPoints(points)
+  loop.Normalize()
+  return loop
 }
 
 
