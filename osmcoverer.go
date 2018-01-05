@@ -36,10 +36,10 @@ func main() {
   outputDirectory := flag.String("outdir", "output", "Output directory")
   markerInputFilePath := flag.String("markers", "", "CSV of markers. Format: <name>,<latitude>,<longitude> Names containing a comma must be in quotes.")
   featureColor := flag.String("cf", "#7e7e7e", "Feature color")
-  coverColor := flag.String("cc", "#008000", "Cover cells color")//"#80ff80"
+  coverColor := flag.String("cc", "#008000", "Cover cells color")
   holeColor := flag.String("ch", "#ff8080", "Hole cells color")
   markerColor := flag.String("cm", "#7e7e7e", "Marker color")
-  markerCoverColor := flag.String("cmc", "#008000", "Marker cover color (only used in separate output)")
+  markerCoverColor := flag.String("cmc", "#008000", "Marker cover color")
   markerHoleColor := flag.String("cmh", "#ff8080", "Marker hole color (only used in separate output)")
   flag.Parse()
   fmt.Println("Separate:", *outputSeparateFiles)
