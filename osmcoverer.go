@@ -301,6 +301,8 @@ func getMarkersFromCsv(csvFilename string, markerColor string, gridLevel int) []
     feature.SetProperty("cellid", cellId.ToToken())
     feature.SetProperty("within", []string{})
     feature.SetProperty("marker-color", markerColor)
+    feature.SetProperty("lat", strconv.FormatFloat(lat, 'f', -1, 64))
+    feature.SetProperty("lng", strconv.FormatFloat(lng, 'f', -1, 64))
     marker.feature = feature
     markers = append(markers, marker)
   }
@@ -328,7 +330,8 @@ func outputContainedMarkersToCsv(markers []Marker, outputDirectory string) {
   defer writer.Flush()
   for _, marker := range markers {
     for _, within := range marker.feature.Properties["within"].([]string) {
-      err := writer.Write([]string{marker.feature.Properties["name"].(string), within})
+      err := writer.Write([]string{marker.feature.Properties["name"].(string), marker.feature.Properties["lat"].(string), marker.feature.Properties["lng"].(string)})
+      _ = within
       check(err)
     }
   }
