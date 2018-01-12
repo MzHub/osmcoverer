@@ -327,8 +327,10 @@ func outputContainedMarkersToCsv(markers []Marker, outputDirectory string) {
   writer := csv.NewWriter(csvFile)
   defer writer.Flush()
   for _, marker := range markers {
-    for _, within := range marker.feature.Properties["within"].([]string) {
-      err := writer.Write([]string{marker.feature.Properties["name"].(string), within})
+    lat, lng := marker.feature.Geometry.Point[1], marker.feature.Geometry.Point[0]
+    within := marker.feature.Properties["within"].([]string)
+    if len(within) > 0 {
+      err := writer.Write([]string{marker.feature.Properties["name"].(string), strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64)})
       check(err)
     }
   }
