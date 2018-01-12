@@ -414,16 +414,23 @@ func getGeojsonMultiPolygonFromCellUnion(cellUnion s2.CellUnion) ([]string, [][]
   var cellGeometry [][][][]float64
   for _, cellId := range cellUnion {
     cellIds = append(cellIds, cellId.ToToken())
-    cell := s2.CellFromCellID(cellId)
-    vertices := [][]float64{}
-    for k := 0; k < 5; k++ {
-      vertex := cell.Vertex(k % 4)
-      latlng := s2.LatLngFromPoint(vertex)
-      vertices = append(vertices, []float64{float64(latlng.Lng.Degrees()), float64(latlng.Lat.Degrees())})
-    }
-    cellGeometry = append(cellGeometry, [][][]float64{vertices})
+    cellGeometry = append(cellGeometry, getGeometryFromCellId(cellId))
   }
   return cellIds, cellGeometry
+}
+
+
+func getGeometryFromCellId(cellId s2.CellID) [][][]float64 {
+  var cellGeometry [][][]float64
+  cell := s2.CellFromCellID(cellId)
+  vertices := [][]float64{}
+  for k := 0; k < 5; k++ {
+    vertex := cell.Vertex(k % 4)
+    latlng := s2.LatLngFromPoint(vertex)
+    vertices = append(vertices, []float64{float64(latlng.Lng.Degrees()), float64(latlng.Lat.Degrees())})
+  }
+  cellGeometry = [][][]float64{vertices}
+  return cellGeometry
 }
 
 
