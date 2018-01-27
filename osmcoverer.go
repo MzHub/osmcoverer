@@ -168,8 +168,8 @@ func main() {
     containedMarkers, containedHoleMarkers, nearbyMarkers := checkContainedMarkerFeatures(covering, holeCovering, *maxLevel, isHole, feature, markers)
 
     if *checkCellCenters {
-      containedMarkers = checkContainedCellCenters(polygons, isHole, feature, containedMarkers)
-      containedHoleMarkers = checkContainedCellCenters(holePolygons, true, feature, containedHoleMarkers)
+      containedMarkers, nearbyMarkers = checkContainedCellCenters(polygons, isHole, feature, containedMarkers, nearbyMarkers)
+      containedHoleMarkers, nearbyMarkers = checkContainedCellCenters(holePolygons, true, feature, containedHoleMarkers, nearbyMarkers)
     }
 
     if *outputSeparateFiles {
@@ -418,7 +418,7 @@ func checkContainedMarkerFeatures(
 }
 
 
-func checkContainedCellCenters(polygons []*s2.Polygon, isHole bool, coveringFeature *geojson.Feature, markers []Marker) []Marker {
+func checkContainedCellCenters(polygons []*s2.Polygon, isHole bool, coveringFeature *geojson.Feature, markers []Marker, nearbyMarkers []Marker) ([]Marker, []Marker) {
   containedMarkers := []Marker{}
   for _, marker := range markers {
     isWithin := false
@@ -436,9 +436,11 @@ func checkContainedCellCenters(polygons []*s2.Polygon, isHole bool, coveringFeat
     }
     if isWithin {
       containedMarkers = append(containedMarkers, marker)
+    } else {
+      nearbyMarkers = append(nearbyMarkers, marker)
     }
   }
-  return containedMarkers
+  return containedMarkers, nearbyMarkers
 }
 
 
