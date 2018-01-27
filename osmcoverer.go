@@ -17,6 +17,7 @@ import (
 
 type Marker struct {
   cellId *s2.CellID
+  cellAtLevel *s2.Cell
   feature *geojson.Feature
 }
 
@@ -27,6 +28,7 @@ func main() {
   skipMarkerlessFeatures := flag.Bool("skipmarkerless", false, "Skip features with no markers within")
   skipFeaturelessMarkers := flag.Bool("skipfeatureless", false, "Skip markers not within features")
   excludeCellFeatures := flag.Bool("excludecellfeatures", false, "Exclude cell features (only useful when visualizing markers)")
+  checkCellCenters := flag.Bool("checkcellcenters", true, "Check cell centers for containment in addition to Covering")
   shouldIndent := flag.Bool("pretty", true, "Output pretty printend GeoJSON")
   maxCellFeatures := flag.Int("maxcellfeatures", 1000, "Skip features which generate more cells than this")
   maxLevel := flag.Int("maxlevel", 20, "MaxLevel setting for RegionCoverer")
@@ -47,6 +49,7 @@ func main() {
   fmt.Println("Skip markerless:", *skipMarkerlessFeatures)
   fmt.Println("Skip featureless:", *skipFeaturelessMarkers)
   fmt.Println("Exclude cell features:", *excludeCellFeatures)
+  fmt.Println("Check cell centers:", *checkCellCenters)
   if *gridLevel > 0 {
     fmt.Println("Grid:", fmt.Sprintf("Level %d", *gridLevel))
   } else {
@@ -68,7 +71,7 @@ func main() {
   var markers []Marker
   featuresWithMarkers := []*geojson.Feature{}
   if *markerInputFilePath != "" {
-    markers = getMarkersFromCsv(*markerInputFilePath, *markerColor, *gridLevel)
+    markers = getMarkersFromCsv(*markerInputFilePath, *markerColor, *gridLevel, *maxLevel)
   } else {
     markers = []Marker{}
   }
@@ -163,6 +166,11 @@ func main() {
     }
 
     containedMarkers, containedHoleMarkers, nearbyMarkers := checkContainedMarkerFeatures(covering, holeCovering, *maxLevel, isHole, feature, markers)
+
+    if *checkCellCenters {
+      containedMarkers = checkContainedCellCenters(polygons, isHole, feature, containedMarkers)
+      containedHoleMarkers = checkContainedCellCenters(holePolygons, true, feature, containedHoleMarkers)
+    }
 
     if *outputSeparateFiles {
       var outputGeojsonData []byte
@@ -265,7 +273,11 @@ func main() {
     check(err)
   }
 
-  outputContainedMarkersToCsv(markers, *outputDirectory)
+  if *checkCellCenters {
+    outputContainedCellCentersToCsv(markers, *outputDirectory)
+  } else {
+    outputContainedMarkersToCsv(markers, *outputDirectory)
+  }
 
   // End
   fmt.Println("Done")
@@ -281,7 +293,7 @@ func getFeatureCollectionFromGeojson(geojsonFilename string) *geojson.FeatureCol
 }
 
 
-func getMarkersFromCsv(csvFilename string, markerColor string, gridLevel int) []Marker {
+func getMarkersFromCsv(csvFilename string, markerColor string, gridLevel int, maxLevel int) []Marker {
   markers := []Marker{}
   for _, row := range readCsv(csvFilename) {
     var marker Marker
@@ -292,14 +304,20 @@ func getMarkersFromCsv(csvFilename string, markerColor string, gridLevel int) []
     check(err)
     latlng := s2.LatLngFromDegrees(lat, lng)
     cellId := s2.CellIDFromLatLng(latlng)
+    cellAtLevel := s2.CellFromCellID(cellId.Parent(maxLevel))
     marker.cellId = &cellId
+    marker.cellAtLevel = &cellAtLevel
     feature := geojson.NewPointFeature([]float64{lng, lat})
     if gridLevel > 0 {
       feature.SetProperty(fmt.Sprintf("level%dcellid", gridLevel), cellId.Parent(gridLevel).ToToken())
     }
+    if maxLevel > 0 && maxLevel != gridLevel {
+      feature.SetProperty(fmt.Sprintf("level%dcellid", maxLevel), cellId.Parent(maxLevel).ToToken())
+    }
     feature.SetProperty("name", name)
     feature.SetProperty("cellid", cellId.ToToken())
     feature.SetProperty("within", []string{})
+    feature.SetProperty("centerwithin", []string{})
     feature.SetProperty("marker-color", markerColor)
     marker.feature = feature
     markers = append(markers, marker)
@@ -329,6 +347,23 @@ func outputContainedMarkersToCsv(markers []Marker, outputDirectory string) {
   for _, marker := range markers {
     lat, lng := marker.feature.Geometry.Point[1], marker.feature.Geometry.Point[0]
     within := marker.feature.Properties["within"].([]string)
+    if len(within) > 0 {
+      err := writer.Write([]string{marker.feature.Properties["name"].(string), strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64)})
+      check(err)
+    }
+  }
+}
+
+
+func outputContainedCellCentersToCsv(markers []Marker, outputDirectory string) {
+  csvFile, err := os.Create(fmt.Sprintf("%s/markers_within_features.csv", outputDirectory))
+  check(err)
+  defer csvFile.Close()
+  writer := csv.NewWriter(csvFile)
+  defer writer.Flush()
+  for _, marker := range markers {
+    lat, lng := marker.feature.Geometry.Point[1], marker.feature.Geometry.Point[0]
+    within := marker.feature.Properties["centerwithin"].([]string)
     if len(within) > 0 {
       err := writer.Write([]string{marker.feature.Properties["name"].(string), strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64)})
       check(err)
@@ -380,6 +415,30 @@ func checkContainedMarkerFeatures(
   }
 
   return containedMarkers, containedHoleMarkers, nearbyMarkers
+}
+
+
+func checkContainedCellCenters(polygons []*s2.Polygon, isHole bool, coveringFeature *geojson.Feature, markers []Marker) []Marker {
+  containedMarkers := []Marker{}
+  for _, marker := range markers {
+    isWithin := false
+    for _, polygon := range polygons {
+      if polygon.ContainsPoint(marker.cellAtLevel.Center()) {
+        withinText := getPathForFeature(coveringFeature)
+        if isHole {
+          withinText += " (hole)"
+        }
+        within := marker.feature.Properties["centerwithin"]
+        within = append(within.([]string), withinText)
+        marker.feature.SetProperty("centerwithin", within)
+        isWithin = true
+      }
+    }
+    if isWithin {
+      containedMarkers = append(containedMarkers, marker)
+    }
+  }
+  return containedMarkers
 }
 
 
